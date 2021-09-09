@@ -2,6 +2,7 @@
 import Control.Exception
 
 import Text.Read (readMaybe)
+import Data.List (partition, intercalate)
 
 import qualified Data.ByteString.Builder as BL
 import qualified Data.ByteString.Lazy as L
@@ -53,7 +54,7 @@ named "32hex" = Base (Just $ pad_eq) 5 8 True  $ take 32 $ numbers ++ symbols
 named "45"    = Base Nothing         2 3 False $           numbers ++ symbols ++ " $%*+-./:"
 named "64"    = Base (Just $ pad_eq) 3 4 True  $           symbols ++ symbols_lc ++ numbers ++ "+/"
 named "64url" = Base (Just $ pad_eq) 3 4 True  $           symbols ++ symbols_lc ++ numbers ++ "-_"
-named _ = throw $ PatternMatchFail "named"
+named s = throw $ PatternMatchFail $ "named " ++ s
 
 {- some wrappers around System.Exit stuff that is unnecessarily complicated -}
 exit_code :: Int -> ExitCode
@@ -70,13 +71,14 @@ usage :: IO String
 usage = do
 	prog <- getProgName
 	return $ "\
-\usage: " ++ prog ++ " [OPTS] {-d|-e} {-a ALPH I O|NAMED} [-p PAD]\n\
+\usage: " ++ prog ++ " [OPTS] {-d | -e} {-a ALPH I O | NAMED} [-p PAD]\n\
 \\n\
 \Options:\n\
 \  -a ALPH I O  use the ordered ALPH as alphabet, I and O are the input and\n\
 \               output group lengths in bytes and characters, respectively\n\
 \  -d           decode from base-ALPH\n\
 \  -e           encode to base-ALPH\n\
+\  -h           display this help message\n\
 \  -i           ignore non-alphabet characters in input\n\
 \  -p PAD       use PAD as padding character\n\
 \  -r           RFC-4648 interpretation of chunks to encode\n\
@@ -123,69 +125,143 @@ parse_nat_opt opt label value = do
 	else
 		return n
 
-parse_args :: Maybe Base
-           -> Maybe Mode
-           -> Maybe Char
-           -> Maybe Bool
-           -> Wrap
-           -> Bool
+data Flag = Short Char | Long String deriving (Eq)
+
+instance Show Flag where
+	show (Short c) = '-':[c]
+	show (Long s) = "--" ++ s
+
+data Option a = Option Flag [String] ([String] -> a)
+
+data ArgsException = UnknownFlag Flag
+                   | MissingParams Flag [String]
+                   deriving (Show)
+
+instance Exception ArgsException
+
+parse :: [Option a] -> [String] -> (String -> a) -> [a]
+parse opts args uh = parse' args []
+  where is_short f = case f of Short _ -> True ; _ -> False
+	(short,long) = partition (is_short . fst) [(f,(p,e)) | Option f p e <- opts]
+
+	parse' [] ac = ac
+	parse' ("--":xs) ac = ac ++ map uh xs
+	parse' (('-':'-':os):xs) ac =
+		let (p,e) = lookup_just (Long os) long in
+		interp (Long os) p e ac xs
+	parse' (('-':o:os):xs) ac =
+		let (p,e) = lookup_just (Short o) short in
+		interp (Short o) p e ac $ short_args (length p) os xs
+	parse' (x:xs) ac = parse' xs (ac ++ [uh x])
+
+	short_args _ []  xs = xs
+	short_args 0 rem xs = (('-':rem):xs)
+	short_args _ rem xs = (rem:xs)
+
+	interp f p e ac xs = if length xs >= length p
+	                     then let (as,xs') = splitAt (length p) xs in
+	                          parse' xs' (ac ++ [e as])
+	                     else throw $ MissingParams f $ drop (length xs) p
+
+	lookup_just f l = case lookup f l of Nothing -> throw $ UnknownFlag f
+	                                     Just x -> x
+
+
+opts :: [Option ((Params, Maybe Char, Maybe Bool) -> IO (Params, Maybe Char, Maybe Bool))]
+opts = [ Option (Short 'a') ["ALPH","I","O"] (\(alph:i:[o]) (par,pad,rfc) -> do
+		i <- parse_nat_opt "-a" "I" i
+		o <- parse_nat_opt "-a" "O" o
+		return (par { base = Just $ Base Nothing i o False alph },pad,rfc))
+       , Option (Short 'd') [] (\_ (par,pad,rfc) -> return (par { mode = Just Decode },pad,rfc))
+       , Option (Short 'e') [] (\_ (par,pad,rfc) -> return (par { mode = Just Encode },pad,rfc))
+       , Option (Short 'h') [] (\_ _ -> usage >>= die 0)
+       , Option (Short 'i') [] (\_ (par,pad,rfc) -> return (par { ign = True },pad,rfc))
+       , Option (Short 'p') ["PAD"] (\[pad] (par,_,rfc) ->
+		case pad of [p] -> return (par,Just p,rfc)
+		            _   -> die 1 $ "error: option '-p' requires a \
+		                           \single character for padding\n")
+       , Option (Short 'r') [] (\_ (par,pad,_) -> return (par,pad,Just True))
+       , Option (Short 'w') ["COLS"] (\[s] (par,pad,rfc) -> do
+		n <- parse_nat_opt "-w" "COLS" s
+		let wrap = if n == 0 then NoWrap else Wrap n
+		return (par { wrap = wrap },pad,rfc))
+       ]
+
+{-
+parse_args :: Params
+           -> Maybe Char -- pad
+           -> Maybe Bool -- rfc
            -> [String]
            -> IO Params
 
-parse_args _ _ _ _ _ _ ("-h":_) = usage >>= die 0
+parse_args _ _ _ ("-h":_) = usage >>= die 0
 
-parse_args alph _    pad rfc wrap ign ("-e":xs) =
-	parse_args alph (Just Encode) pad rfc wrap ign xs
-parse_args alph _    pad rfc wrap ign ("-d":xs) =
-	parse_args alph (Just Decode) pad rfc wrap ign xs
-parse_args _    mode pad rfc wrap ign ("-a":alph:i:o:xs) = do
-	ni <- parse_nat_opt "-a" "I" i
-	no <- parse_nat_opt "-a" "O" o
-	parse_args (Just $ Base Nothing ni no False alph)
-	           mode pad rfc wrap ign xs
-parse_args _ _ _ _ _ _ ("-a":_) =
+parse_args par pad rfc ("-e":xs) =
+	parse_args (par { mode = Just Encode }) pad rfc xs
+parse_args par pad rfc ("-d":xs) =
+	parse_args (par { mode = Just Decode }) pad rfc xs
+parse_args par pad rfc ("-a":alph:i:o:xs) = do
+	i <- parse_nat_opt "-a" "I" i
+	o <- parse_nat_opt "-a" "O" o
+	parse_args (par { base = Just $ Base Nothing i o False alph }) pad rfc xs
+parse_args _ _ _ ("-a":_) =
 	die 1 $ "error: option '-a' requires parameters ALPH, I and O\n"
 
-parse_args base mode _ rfc wrap ign ("-p":[p]:xs) =
-	parse_args base mode (Just p) rfc wrap ign xs
-parse_args _ _ _ _ _ _ ["-p"] =
+parse_args par _ rfc ("-p":[p]:xs) =
+	parse_args par (Just p) rfc xs
+parse_args _ _ _ ["-p"] =
 	die 1 $ "error: option '-p' requires parameter PAD\n"
-parse_args _ _ _ _ _ _ ("-p":_) =
+parse_args _ _ _ ("-p":_) =
 	die 1 $ "error: option '-p' requires a single byte character for padding\n"
 
-parse_args base mode pad _ wrap ign ("-r":xs) =
-	parse_args base mode pad (Just True) wrap ign xs
+parse_args par pad _ ("-r":xs) =
+	parse_args par pad (Just True) xs
 
-parse_args base mode pad rfc _ ign ("-w":s:xs) = do
+parse_args par pad rfc ("-w":s:xs) = do
 	n <- parse_nat_opt "-w" "COLS" s
-	let wrap = if n == 0 then NoWrap else Wrap n in
-		parse_args base mode pad rfc wrap ign xs
-parse_args _ _ _ _ _ _ ["-w"] =
+	let wrap = if n == 0 then NoWrap else Wrap n
+	parse_args (par { wrap = wrap }) pad rfc xs
+parse_args _ _ _ ["-w"] =
 	die 1 $ "error: option '-w' requires a numeric parameter COLS >= 0\n"
 
-parse_args base mode pad rfc wrap _ ("-i":xs) =
-	parse_args base mode pad rfc wrap True xs
+parse_args par pad rfc ("-i":xs) =
+	parse_args (par { ign = True }) pad rfc xs
 
-parse_args _    mode pad rfc wrap ign (x:xs) = do
+parse_args par pad rfc (x:xs) = do
 	base <- catch (evaluate $ named x) $ \(PatternMatchFail _) ->
 		die 1 $ "error: unrecognized option '" ++ x ++ "'\n"
-	parse_args (Just base) mode pad rfc wrap ign xs
+	parse_args (par { base = Just base }) pad rfc xs
 
-parse_args (Just base) mode (Just p) rfc wrap ign [] | pad base == Nothing =
-	parse_args (Just base { pad = Just p }) mode Nothing rfc wrap ign []
+parse_args par@(Params (Just base) _ _ _) (Just p) rfc [] | pad base == Nothing =
+	parse_args (par { base = Just base { pad = Just p } }) Nothing rfc []
 
-parse_args (Just base) mode pad (Just rfc) wrap ign [] | rfc4648 base == False =
-	parse_args (Just base { rfc4648 = rfc }) mode pad Nothing wrap ign []
+parse_args par@(Params (Just base) _ _ _) pad (Just rfc) [] | rfc4648 base == False =
+	parse_args (par { base = Just base { rfc4648 = rfc } }) pad Nothing []
 
-parse_args base mode _ _ wrap ign [] =
-	return $ Params base mode wrap ign
+parse_args par _ _ [] = return par
+-}
 
 parse_argv :: IO Params
 parse_argv = do
 	env <- getEnvironment
 	args <- getArgs
 	let def_mode = fmap (const Encode) $ lookup "BASE_COMPAT" env
-	parse_args Nothing def_mode Nothing Nothing (Wrap 76) False args
+	let def_params = Params Nothing def_mode (Wrap 76) False
+	let uh x (par,pad,rfc) = do
+		base <- catch (evaluate $ named x) $ \(PatternMatchFail _) ->
+			die 1 $ "error: unrecognized name '" ++ x ++ "'\n"
+		return (par { base = Just base },pad,rfc)
+	ac <- catch (evaluate $ parse opts args uh) $ \ex -> case ex of
+		UnknownFlag f -> die 1 $ "error: unknown option '" ++ show f ++ "'\n"
+		MissingParams f p -> die 1 $ "error: parameters " ++ intercalate ", " p ++
+		                             " of option '" ++ show f ++ "' missing\n"
+	(par,pad,rfc) <- foldl (>>=) (pure (def_params,Nothing,Nothing)) ac
+	let do_pad (Just pad) (Just base) = Just base { pad = Just pad }
+	    do_pad _ b = b
+	    do_rfc (Just rfc) (Just base) = Just base { rfc4648 = rfc }
+	    do_rfc _ b = b
+	-- parse_args def_params Nothing Nothing args
+	return $ par { base = do_pad pad $ do_rfc rfc $ base par }
 
 main :: IO ()
 main = do
@@ -195,7 +271,7 @@ main = do
 			die 1 $ "error: ALPH not specified\n"
 		Just base | length (alph base) < 2 ->
 			die 1 $ "error: at least 2 symbols are required in ALPH\n"
-		Just base | otherwise ->
+		          | otherwise ->
 			return base
 	case mode of Nothing -> die 1 $ "error: decode/encode mode not specified\n"
 	             Just Encode -> io_encode base wrap
