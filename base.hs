@@ -2,7 +2,7 @@
 import Control.Exception
 
 import Text.Read (readMaybe)
-import Data.List (partition, intercalate)
+import Data.List (partition)
 
 import qualified Data.ByteString.Builder as BL
 import qualified Data.ByteString.Lazy as L
@@ -71,10 +71,10 @@ usage :: IO String
 usage = do
 	prog <- getProgName
 	return $ "\
-\usage: " ++ prog ++ " [OPTS] {-d | -e} {-a ALPH I O | NAMED} [-p PAD]\n\
+\usage: " ++ prog ++ " [OPTS] {-d | -e} {-a I:O:ALPH | NAMED} [-p PAD]\n\
 \\n\
 \Options:\n\
-\  -a ALPH I O  use the ordered ALPH as alphabet, I and O are the input and\n\
+\  -a I:O:ALPH  use the ordered ALPH as alphabet, I and O are the input and\n\
 \               output group lengths in bytes and characters, respectively\n\
 \  -d           decode from base-ALPH\n\
 \  -e           encode to base-ALPH\n\
@@ -85,7 +85,7 @@ usage = do
 \  -w COLS      wrap encoded lines after COLS characters (default 76);\n\
 \               use 0 to disable line wrapping\n\
 \\n\
-\As an alternative to '-a ALPH I O' the NAMED parameter refers to one of:\n\
+\As an alternative to '-a I:O:ALPH' the NAMED parameter refers to one of:\n\
 \  16           hex encoding (RFC-4648 section 8)\n\
 \  32           same as 'base32' program (RFC-4648 section 6)\n\
 \  32hex        extended hex alphabet base32 (RFC-4648 section 7)\n\
@@ -131,10 +131,12 @@ instance Show Flag where
 	show (Short c) = '-':[c]
 	show (Long s) = "--" ++ s
 
-data Option a = Option Flag [String] ([String] -> a)
+data ArgSpec a = NoArg a | ArgReq (String -> a)
+
+type Option a = (Flag, ArgSpec a)
 
 data ArgsException = UnknownFlag Flag
-                   | MissingParams Flag [String]
+                   | MissingParam Flag
                    deriving (Show)
 
 instance Exception ArgsException
@@ -142,46 +144,54 @@ instance Exception ArgsException
 parse :: [Option a] -> [String] -> (String -> a) -> [a]
 parse opts args uh = parse' args []
   where is_short f = case f of Short _ -> True ; _ -> False
-	(short,long) = partition (is_short . fst) [(f,(p,e)) | Option f p e <- opts]
+	(short,long) = partition (is_short . fst) opts
+
+	na (NoArg  _) = 0
+	na (ArgReq _) = 1
+
+	fa (NoArg a)  = const a
+	fa (ArgReq a) = a
 
 	parse' [] ac = ac
 	parse' ("--":xs) ac = ac ++ map uh xs
 	parse' (('-':'-':os):xs) ac =
-		let (p,e) = lookup_just (Long os) long in
-		interp (Long os) p e ac xs
+		let a = lookup_just (Long os) long in
+		interp (Long os) a ac xs
 	parse' (('-':o:os):xs) ac =
-		let (p,e) = lookup_just (Short o) short in
-		interp (Short o) p e ac $ short_args (length p) os xs
+		let a = lookup_just (Short o) short in
+		interp (Short o) a ac $ short_args (na a) os xs
 	parse' (x:xs) ac = parse' xs (ac ++ [uh x])
 
+	short_args :: Int -> String -> [String] -> [String]
 	short_args _ []  xs = xs
 	short_args 0 rem xs = (('-':rem):xs)
 	short_args _ rem xs = (rem:xs)
 
-	interp f p e ac xs = if length xs >= length p
-	                     then let (as,xs') = splitAt (length p) xs in
-	                          parse' xs' (ac ++ [e as])
-	                     else throw $ MissingParams f $ drop (length xs) p
+	interp f a ac xs = if length xs >= na a
+	                   then let (as,xs') = splitAt (na a) xs in
+	                        parse' xs' (ac ++ [fa a $ head as])
+	                   else throw $ MissingParam f
 
 	lookup_just f l = case lookup f l of Nothing -> throw $ UnknownFlag f
 	                                     Just x -> x
 
-
 opts :: [Option ((Params, Maybe Char, Maybe Bool) -> IO (Params, Maybe Char, Maybe Bool))]
-opts = [ Option (Short 'a') ["ALPH","I","O"] (\(alph:i:[o]) (par,pad,rfc) -> do
+opts = [ (Short 'a', ArgReq $ \s (par,pad,rfc) -> do
+		let (i,oa) = break ((==) ':') s
+		let (o,a')  = break ((==) ':') $ tail oa
 		i <- parse_nat_opt "-a" "I" i
 		o <- parse_nat_opt "-a" "O" o
-		return (par { base = Just $ Base Nothing i o False alph },pad,rfc))
-       , Option (Short 'd') [] (\_ (par,pad,rfc) -> return (par { mode = Just Decode },pad,rfc))
-       , Option (Short 'e') [] (\_ (par,pad,rfc) -> return (par { mode = Just Encode },pad,rfc))
-       , Option (Short 'h') [] (\_ _ -> usage >>= die 0)
-       , Option (Short 'i') [] (\_ (par,pad,rfc) -> return (par { ign = True },pad,rfc))
-       , Option (Short 'p') ["PAD"] (\[pad] (par,_,rfc) ->
+		return (par { base = Just $ Base Nothing i o False $ tail a' },pad,rfc))
+       , (Short 'd', NoArg $ \(par,pad,rfc) -> return (par { mode = Just Decode },pad,rfc))
+       , (Short 'e', NoArg $ \(par,pad,rfc) -> return (par { mode = Just Encode },pad,rfc))
+       , (Short 'h', NoArg $ \_ -> usage >>= die 0)
+       , (Short 'i', NoArg $ \(par,pad,rfc) -> return (par { ign = True },pad,rfc))
+       , (Short 'p', ArgReq $ \pad (par,_,rfc) ->
 		case pad of [p] -> return (par,Just p,rfc)
 		            _   -> die 1 $ "error: option '-p' requires a \
 		                           \single character for padding\n")
-       , Option (Short 'r') [] (\_ (par,pad,_) -> return (par,pad,Just True))
-       , Option (Short 'w') ["COLS"] (\[s] (par,pad,rfc) -> do
+       , (Short 'r', NoArg $ \(par,pad,_) -> return (par,pad,Just True))
+       , (Short 'w', ArgReq $ \s (par,pad,rfc) -> do
 		n <- parse_nat_opt "-w" "COLS" s
 		let wrap = if n == 0 then NoWrap else Wrap n
 		return (par { wrap = wrap },pad,rfc))
@@ -253,8 +263,8 @@ parse_argv = do
 		return (par { base = Just base },pad,rfc)
 	ac <- catch (evaluate $ parse opts args uh) $ \ex -> case ex of
 		UnknownFlag f -> die 1 $ "error: unknown option '" ++ show f ++ "'\n"
-		MissingParams f p -> die 1 $ "error: parameters " ++ intercalate ", " p ++
-		                             " of option '" ++ show f ++ "' missing\n"
+		MissingParam f -> die 1 $ "error: option '" ++ show f ++
+		                          "' requires a parameter\n"
 	(par,pad,rfc) <- foldl (>>=) (pure (def_params,Nothing,Nothing)) ac
 	let do_pad (Just pad) (Just base) = Just base { pad = Just pad }
 	    do_pad _ b = b
