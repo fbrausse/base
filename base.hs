@@ -52,6 +52,7 @@ named "32hex" = Base (Just $ pad_eq) 5 8 True  $ take 32 $ numbers ++ symbols
 named "45"    = Base Nothing         2 3 False $           numbers ++ symbols ++ " $%*+-./:"
 named "64"    = Base (Just $ pad_eq) 3 4 True  $           symbols ++ symbols_lc ++ numbers ++ "+/"
 named "64url" = Base (Just $ pad_eq) 3 4 True  $           symbols ++ symbols_lc ++ numbers ++ "-_"
+named "z85"   = Base Nothing         4 5 True  $           numbers ++ symbols_lc ++ symbols ++ ".-:+=^!/*?&<>()[]{}@%$#"
 named s = throw $ PatternMatchFail $ "named " ++ s
 
 usage :: IO String
@@ -79,6 +80,7 @@ usage = do
 \  45           base45 encoding (draft-faltstrom-base45-07)\n\
 \  64           same as 'base64' program (RFC-4648 section 4)\n\
 \  64url        file- and URL-safe base64 (RFC-4648 section 5)\n\
+\  z85          ascii85-like encoding (ZeroMQ 32/Z85)\n\
 \\n\
 \Environment variables affecting the behaviour:\n\
 \  BASE_COMPAT  if set, the default mode is to encode; otherwise there is no\n\
