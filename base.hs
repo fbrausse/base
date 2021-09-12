@@ -1,15 +1,14 @@
 
-import Control.Exception
+import Control.Exception (PatternMatchFail(..), throw, catch, evaluate)
 
 import Text.Read (readMaybe)
-import Data.List (partition)
 
 import qualified Data.ByteString.Builder as BL
 import qualified Data.ByteString.Lazy as L
 
 import System.Environment (getProgName, getArgs, getEnvironment)
-import System.Exit hiding (die)
-import System.IO (hPutStr, stdin, stdout, stderr, hSetBinaryMode, hGetContents)
+import System.IO (hPutStr, stdin, stdout, hSetBinaryMode, hGetContents)
+import System.Simple
 
 import Data.String.Conv.Base as CB (Base(..), part, encode, decode)
 
@@ -46,7 +45,6 @@ symbols_lc = "abcdefghijklmnopqrstuvwxyz"
 pad_eq :: Char
 pad_eq     = '='
 
--- incomplete pattern matching, failure is caught and handled in parse_args below
 named :: String -> Base
 named "16"    = Base Nothing         1 2 True  $ take 16 $ numbers ++ symbols
 named "32"    = Base (Just $ pad_eq) 5 8 True  $           symbols ++ "234567"
@@ -56,22 +54,11 @@ named "64"    = Base (Just $ pad_eq) 3 4 True  $           symbols ++ symbols_lc
 named "64url" = Base (Just $ pad_eq) 3 4 True  $           symbols ++ symbols_lc ++ numbers ++ "-_"
 named s = throw $ PatternMatchFail $ "named " ++ s
 
-{- some wrappers around System.Exit stuff that is unnecessarily complicated -}
-exit_code :: Int -> ExitCode
-exit_code 0 = ExitSuccess
-exit_code n = ExitFailure n
-
-die :: Int -> String -> IO a
-die code msg = do
-	let hdl = if code == 0 then stdout else stderr
-	hPutStr hdl msg
-	exitWith $ exit_code code
-
 usage :: IO String
 usage = do
 	prog <- getProgName
 	return $ "\
-\usage: " ++ prog ++ " [OPTS] {-d | -e} {-a I:O:ALPH | NAMED} [-p PAD]\n\
+\usage: " ++ prog ++ " [OPTS] {-d | -e} {-a I:O:ALPH | NAMED}\n\
 \\n\
 \Options:\n\
 \  -a I:O:ALPH  use the ordered ALPH as alphabet, I and O are the input and\n\
@@ -125,57 +112,15 @@ parse_nat_opt opt label value = do
 	else
 		return n
 
-data Flag = Short Char | Long String deriving (Eq)
+type Par = (Params, Maybe Char, Maybe Bool)
 
-instance Show Flag where
-	show (Short c) = '-':[c]
-	show (Long s) = "--" ++ s
+non_opt :: String -> Par -> IO Par
+non_opt x (par,pad,rfc) = do
+	base <- catch (evaluate $ named x) $ \(PatternMatchFail _) ->
+		die 1 $ "error: unrecognized name '" ++ x ++ "'\n"
+	return (par { base = Just base },pad,rfc)
 
-data ArgSpec a = NoArg a | ArgReq (String -> a)
-
-type Option a = (Flag, ArgSpec a)
-
-data ArgsException = UnknownFlag Flag
-                   | MissingParam Flag
-                   deriving (Show)
-
-instance Exception ArgsException
-
-parse :: [Option a] -> [String] -> (String -> a) -> [a]
-parse opts args uh = parse' args []
-  where is_short f = case f of Short _ -> True ; _ -> False
-	(short,long) = partition (is_short . fst) opts
-
-	na (NoArg  _) = 0
-	na (ArgReq _) = 1
-
-	fa (NoArg a)  = const a
-	fa (ArgReq a) = a
-
-	parse' [] ac = ac
-	parse' ("--":xs) ac = ac ++ map uh xs
-	parse' (('-':'-':os):xs) ac =
-		let a = lookup_just (Long os) long in
-		interp (Long os) a ac xs
-	parse' (('-':o:os):xs) ac =
-		let a = lookup_just (Short o) short in
-		interp (Short o) a ac $ short_args (na a) os xs
-	parse' (x:xs) ac = parse' xs (ac ++ [uh x])
-
-	short_args :: Int -> String -> [String] -> [String]
-	short_args _ []  xs = xs
-	short_args 0 rem xs = (('-':rem):xs)
-	short_args _ rem xs = (rem:xs)
-
-	interp f a ac xs = if length xs >= na a
-	                   then let (as,xs') = splitAt (na a) xs in
-	                        parse' xs' (ac ++ [fa a $ head as])
-	                   else throw $ MissingParam f
-
-	lookup_just f l = case lookup f l of Nothing -> throw $ UnknownFlag f
-	                                     Just x -> x
-
-opts :: [Option ((Params, Maybe Char, Maybe Bool) -> IO (Params, Maybe Char, Maybe Bool))]
+opts :: [Option (Par -> IO Par)]
 opts = [ (Short 'a', ArgReq $ \s (par,pad,rfc) -> do
 		let (i,oa) = break ((==) ':') s
 		let (o,a')  = break ((==) ':') $ tail oa
@@ -257,11 +202,7 @@ parse_argv = do
 	args <- getArgs
 	let def_mode = fmap (const Encode) $ lookup "BASE_COMPAT" env
 	let def_params = Params Nothing def_mode (Wrap 76) False
-	let uh x (par,pad,rfc) = do
-		base <- catch (evaluate $ named x) $ \(PatternMatchFail _) ->
-			die 1 $ "error: unrecognized name '" ++ x ++ "'\n"
-		return (par { base = Just base },pad,rfc)
-	ac <- catch (evaluate $ parse opts args uh) $ \ex -> case ex of
+	ac <- catch (evaluate $ getopt non_opt opts args) $ \ex -> case ex of
 		UnknownFlag f -> die 1 $ "error: unknown option '" ++ show f ++ "'\n"
 		MissingParam f -> die 1 $ "error: option '" ++ show f ++
 		                          "' requires a parameter\n"
@@ -286,4 +227,4 @@ main = do
 	case mode of Nothing -> die 1 $ "error: decode/encode mode not specified\n"
 	             Just Encode -> io_encode base wrap
 	             Just Decode -> io_decode base ign
-	exitWith $ exit_code 0
+	exit 0
