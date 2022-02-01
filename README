@@ -1,0 +1,45 @@
+base is a simple tool for simple conversion needs between 8-bit binary data
+and a range of ASCII-based encodings such as base64, or hexadecimal.
+
+Building instructions: In a Unix environment with the following tools
+installed run "make".
+
+- GNU make
+- ghc (v8.10 tested, earlier may work, too)
+
+Reproduced below is its help message.  Note that the "named" parameter is
+commonly much more helpful than specifying the alphabet manually.
+
+---------------------------------------------------------------------------
+
+usage: base [OPTS] {-d | -e} {-a I:O:ALPH | NAMED}
+
+Options:
+  -a I:O:ALPH  use the ordered ALPH as alphabet, I and O are the input and
+               output group lengths in bytes and characters, respectively
+  -d           decode from base-ALPH
+  -e           encode to base-ALPH
+  -h           display this help message
+  -i           ignore non-alphabet characters in input
+  -p PAD       use PAD as padding character
+  -r           RFC-4648 interpretation of chunks to encode
+  -w COLS      wrap encoded lines after COLS characters (default 76);
+               use 0 to disable line wrapping
+
+As an alternative to '-a I:O:ALPH' the NAMED parameter refers to one of:
+  16           hex encoding (RFC-4648 section 8)
+  16l          hex encoding with lower-case symbols
+  32           same as 'base32' program (RFC-4648 section 6)
+  32hex        extended hex alphabet base32 (RFC-4648 section 7)
+  45           base45 encoding (draft-faltstrom-base45-07)
+  64           same as 'base64' program (RFC-4648 section 4)
+  64url        file- and URL-safe base64 (RFC-4648 section 5)
+  z85          ascii85-like encoding (ZeroMQ 32/Z85)
+
+Environment variables affecting the behaviour:
+  BASE_COMPAT  if set, the default mode is to encode; otherwise there is no
+               default
+
+Newline characters in the input are ignored for decoding in all modes.
+
+Written by Franz Brauße <fb@paxle.org>; License: BSD-2
