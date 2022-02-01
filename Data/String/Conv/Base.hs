@@ -14,6 +14,7 @@ import Data.List (elemIndex)
 import qualified Data.List (splitAt, null)
 
 import Data.Word (Word8)
+import Data.Bits
 
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Builder as BL
@@ -42,8 +43,13 @@ data Base = Base { pad :: Maybe Char -- additional padding
                  , alph :: String -- decoder alphabet
                  }
 
+-- computes ceil(log_b x) for x > 0 and b > 1
 log' :: Int -> Int -> Int
-log' b x = acc 1
+log' b x | b .&. (b-1) == 0 = -- special case when b is a power of 2
+	let l z = finiteBitSize z - countLeadingZeros z
+	    k   = countTrailingZeros b
+	in (l (x-1) + k-1) `quot` k
+         | otherwise = acc 1
 	where acc :: Integer -> Int
 	      acc a = if fromIntegral x <= a
 	              then 0
