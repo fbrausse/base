@@ -46,6 +46,7 @@ symbols_lc = "abcdefghijklmnopqrstuvwxyz"
 
 named :: String -> Base
 named "16"    = Base Nothing    1 2 True  $ take 16 $ numbers ++ symbols
+named "16l"   = Base Nothing    1 2 True  $ take 16 $ numbers ++ symbols_lc
 named "32"    = Base (Just '=') 5 8 True  $           symbols ++ "234567"
 named "32hex" = Base (Just '=') 5 8 True  $ take 32 $ numbers ++ symbols
 named "45"    = Base Nothing    2 3 False $           numbers ++ symbols ++ " $%*+-./:"
@@ -74,6 +75,7 @@ usage = do
 \\n\
 \As an alternative to '-a I:O:ALPH' the NAMED parameter refers to one of:\n\
 \  16           hex encoding (RFC-4648 section 8)\n\
+\  16l          hex encoding with lower-case symbols\n\
 \  32           same as 'base32' program (RFC-4648 section 6)\n\
 \  32hex        extended hex alphabet base32 (RFC-4648 section 7)\n\
 \  45           base45 encoding (draft-faltstrom-base45-07)\n\
@@ -84,6 +86,8 @@ usage = do
 \Environment variables affecting the behaviour:\n\
 \  BASE_COMPAT  if set, the default mode is to encode; otherwise there is no\n\
 \               default\n\
+\\n\
+\Newline characters in the input are ignored for decoding in all modes.\n\
 \\n\
 \Written by Franz Brauße <fb@paxle.org>; License: BSD-2\n"
 
