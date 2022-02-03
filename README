@@ -27,6 +27,8 @@ Options:
                use 0 to disable line wrapping
 
 As an alternative to '-a I:O:ALPH' the NAMED parameter refers to one of:
+  2msbf        binary encoding (most significant bit first)
+  2lsbf        binary encoding (least significant bit first)
   16           hex encoding (RFC-4648 section 8)
   16l          hex encoding with lower-case symbols
   32           same as 'base32' program (RFC-4648 section 6)

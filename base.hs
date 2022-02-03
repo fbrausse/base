@@ -45,6 +45,8 @@ symbols    = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 symbols_lc = "abcdefghijklmnopqrstuvwxyz"
 
 named :: String -> Base
+named "2msbf" = Base Nothing    1 8 True  $ take  2 $ numbers
+named "2lsbf" = Base Nothing    1 8 False $ take  2 $ numbers
 named "16"    = Base Nothing    1 2 True  $ take 16 $ numbers ++ symbols
 named "16l"   = Base Nothing    1 2 True  $ take 16 $ numbers ++ symbols_lc
 named "32"    = Base (Just '=') 5 8 True  $           symbols ++ "234567"
@@ -74,6 +76,8 @@ usage = do
 \               use 0 to disable line wrapping\n\
 \\n\
 \As an alternative to '-a I:O:ALPH' the NAMED parameter refers to one of:\n\
+\  2msbf        binary encoding (most significant bit first)\n\
+\  2lsbf        binary encoding (least significant bit first)\n\
 \  16           hex encoding (RFC-4648 section 8)\n\
 \  16l          hex encoding with lower-case symbols\n\
 \  32           same as 'base32' program (RFC-4648 section 6)\n\
